@@ -9,10 +9,14 @@ using System.Threading.Tasks;
 
 namespace CSharp_methods_development_lab_1
 {
+    /// <summary>
+    /// Виртуальный массив
+    /// </summary>
+    /// <typeparam name="T">Тип структуры элементов массива</typeparam>
     class VirtualArray<T> : IVirtualArray<T> where T : unmanaged
     {
         static readonly int _defaultBufferSize = 4;//Количество страниц в буфере
-        static readonly int _defaultSizePages = 512/8;//Размер страницы в байтах (512 - это биты)
+        static int _defaultSizePages = 512;//Размер страницы в байтах
         //Адресс файла
         static readonly string defaultFileName = "C:\\Users\\artur.ivanov.2021\\Documents\\ТД\\Технологии и методы программирования\\td1.bm";
         private FileInfo _swapFile; //Файл подкачки
@@ -51,11 +55,10 @@ namespace CSharp_methods_development_lab_1
                 bw.Write("VM");
 
                 //Заполняем массива нулями
-                for (long i = 0; 
-                    i < _size; 
+                for (long i = 0;
+                    i < _size;
                     i++)
-                    bw.Write(new byte[1] {0b_0000_0000},0,1);
-
+                    bw.Write(new byte[1] { 0b_0000_0000 }, 0, 1);
                 bw.Close();
             }
             //Создаём буфер в оперативной памяти
@@ -65,14 +68,18 @@ namespace CSharp_methods_development_lab_1
         }
         public FileInfo swapFile { get => _swapFile; }
         public long size { get => _size; }
-        //Поиск страницы в буфере
-        public int FindIndexPage(long globalElementIndex)
+        /// <summary>
+        ///Поиск страницы в буфере
+        /// </summary>
+        /// <param name="globalElementIndex">Индекс элемента в файле</param>
+        /// <returns>Индекс страницы в буфере</returns>
+        public unsafe int FindIndexPage(long globalElementIndex)
         {
             if (globalElementIndex < 0 || globalElementIndex >= _size)
                 return -1;//Возвращает -1 если вышли за границы массива
 
             //Рассчитываем номер страницы в файле
-            int filePageIndex = (int)(globalElementIndex / _defaultSizePages), result = 0;
+            int filePageIndex = (int)(globalElementIndex / (_defaultSizePages / sizeof(T))), result = 0;
 
             //Проверяем, загружена ли нужная страница в буфер
             if (!_buffer.Any<page<T>>(p => p.fileIndex == filePageIndex))
@@ -114,7 +121,7 @@ namespace CSharp_methods_development_lab_1
 
             return result;
         }
-        public T this[int index]
+        public unsafe T this[int index]
         {
             get
             {
@@ -122,9 +129,17 @@ namespace CSharp_methods_development_lab_1
                     throw new ArgumentOutOfRangeException("Индекс вышел за пределы размера массива");
                 
                 int indexPage = FindIndexPage(index);//Получаем индекс страницы с нужным элементом
+                int indexInBuffer = index % (_defaultSizePages/sizeof(T));
+
+                int nullCount = 0;
+                for (int i = 0; i < sizeof(T); i++)
+                    if (_buffer[indexPage].bitMap[i + indexInBuffer * sizeof(T)] == 0b_0000_0000)
+                        nullCount++;
+                if(nullCount == sizeof(T))
+                    throw new AccessViolationException("Попытка обращения к неинициализированному элементу");
 
                 //Возвращаем требуемый элемент
-                return _buffer[indexPage].elements[index-(_buffer[indexPage].fileIndex* _defaultSizePages)];
+                return _buffer[indexPage].elements[indexInBuffer];
             }
             set
             {
@@ -132,13 +147,13 @@ namespace CSharp_methods_development_lab_1
                     throw new ArgumentOutOfRangeException("Индекс вышел за пределы размера массива");
 
                 //Получаем индекс страницы с нужным элементом
-                int indexPage = FindIndexPage(index), elementIndex = index - (_buffer[indexPage].fileIndex * _buffer[indexPage].elements.Length);
+                int indexPage = FindIndexPage(index), elementIndex = index % (_defaultSizePages / sizeof(T));
                 
                 //Устанавливаем новое значение элемента
                 _buffer[indexPage].elements[elementIndex] = value;
                 
                 //Обновляем байтовую (Она же битовая) карту
-                byte[] byteValue = StructConverter.GetBytes<T>(value);
+                byte[] byteValue = StructConverter.s_getBytes<T>(value);
                 for (int i = 0; i < byteValue.Length; i++)
                     _buffer[indexPage].bitMap[i + elementIndex * byteValue.Length] = byteValue[i];
 
@@ -146,8 +161,10 @@ namespace CSharp_methods_development_lab_1
                 _buffer[indexPage].modify = true;
             }
         }
-
-        //Записываение страницы в файл
+        /// <summary>
+        /// Записываение страницы в файл
+        /// </summary>
+        /// <param name="page">Страница</param>
         private unsafe void WritePage(ref page<T> page)
         {
             page.timeOfModify = DateTime.Now.TimeOfDay;
@@ -162,7 +179,11 @@ namespace CSharp_methods_development_lab_1
 
             bw.Close();
         }
-        //Чтение страницы из файла
+        /// <summary>
+        /// Чтение страницы из файла
+        /// </summary>
+        /// <param name="globalPageIndex"> Индекс страницы в файле </param>
+        /// <returns>Страница из файла</returns>
         private unsafe page<T> ReadPage(int globalPageIndex)
         {
             page<T> page = default(page<T>);
@@ -189,21 +210,25 @@ namespace CSharp_methods_development_lab_1
                 for (int j = 0; j < sizeElements; j++)
                     tmpBytes[j] = page.bitMap[i * sizeElements + j];
 
-                page.elements[i] = StructConverter.CreateStruct<T>(tmpBytes);
+                page.elements[i] = StructConverter.s_createStruct<T>(tmpBytes);
             }
 
             br.Close();
 
             return page;
         }
-        //Сохраняем модифицированные страницы в файл
+        /// <summary>
+        /// Сохранение модифицированных страниц в файл
+        /// </summary>
         public void Save()
         {
             for (int i = 0; i < _defaultBufferSize; i++)
                 if (_buffer[i].modify)
                     WritePage(ref _buffer[i]);
         }
-        //Деструктор на случай сборки мусора
+        /// <summary>
+        /// Деструктор на случай сборки мусора
+        /// </summary>
         ~VirtualArray()
         {
             this.Save();
