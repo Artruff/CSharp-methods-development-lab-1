@@ -15,7 +15,7 @@ namespace CSharp_methods_development_lab_1
         public bool modify;
         public TimeSpan timeOfModify;
         public T[] elements;
-        public byte[] bitMap;
+        public bool[] bitMap;
     }
     //Интерфейс виртуального массива
     interface IVirtualArray<T> where T : unmanaged

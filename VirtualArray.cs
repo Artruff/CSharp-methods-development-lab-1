@@ -21,7 +21,8 @@ namespace CSharp_methods_development_lab_1
         static readonly string defaultFileName = "C:\\Users\\artur.ivanov.2021\\Documents\\ТД\\Технологии и методы программирования\\td1.bm";
         private FileInfo _swapFile; //Файл подкачки
         private page<T>[] _buffer; //Буфер страниц
-        private long _size = 0; // Размер массива
+        private long _sizeArray = 0; // Размер массива
+        private int _sizePage; // Размер массивов элементов страниц
 
         //Конструктор
         unsafe public VirtualArray(string fileName = null, long size = 10000)
@@ -36,17 +37,20 @@ namespace CSharp_methods_development_lab_1
                     throw new FileLoadException("У файла нету требуемой сигнатуры");
 
                 //Расчёт размера массива
-                _size = br.BaseStream.Length - (System.Text.Encoding.Default.GetBytes("VM").Length+1);
+                _sizeArray = br.BaseStream.Length - (System.Text.Encoding.Default.GetBytes("VM").Length+1);
+                _sizePage = _defaultSizePages / sizeof(T);
+
                 br.Close();
             }
             else
             {
                 //Рассчитываем размер массива
-                _size = (size + (_defaultSizePages - (size % _defaultSizePages)) % _defaultSizePages) * sizeof(T);
+                _sizeArray = (size + (_defaultSizePages - (size % _defaultSizePages)) % _defaultSizePages) * sizeof(T);
+                _sizePage = _defaultSizePages / sizeof(T);
 
                 //Проверяем место на диске
                 DriveInfo driver = new DriveInfo(swapFile.FullName);
-                if (driver.TotalFreeSpace < _size * sizeof(T))
+                if (driver.TotalFreeSpace < _sizeArray * sizeof(T))
                     throw new FileLoadException("Недостаточно места на диске");
 
                 BinaryWriter bw = new BinaryWriter(_swapFile.Open(FileMode.CreateNew));
@@ -54,11 +58,13 @@ namespace CSharp_methods_development_lab_1
                 //Создаём сигнатуру в начале файла
                 bw.Write("VM");
 
-                //Заполняем массива нулями
-                for (long i = 0;
-                    i < _size;
-                    i++)
-                    bw.Write(new byte[1] { 0b_0000_0000 }, 0, 1);
+                //Создаём массив в файле
+                page<T> emptyPage = new page<T>();
+                emptyPage.bitMap = new bool[_sizePage];
+                emptyPage.elements = new T[_sizePage];
+                for (int i = 0; i < _sizeArray / _defaultSizePages; i++)
+                    WritePage(ref emptyPage);
+
                 bw.Close();
             }
             //Создаём буфер в оперативной памяти
@@ -67,7 +73,7 @@ namespace CSharp_methods_development_lab_1
                 _buffer[i].fileIndex = -1;
         }
         public FileInfo swapFile { get => _swapFile; }
-        public long size { get => _size; }
+        public long size { get => _sizeArray; }
         /// <summary>
         ///Поиск страницы в буфере
         /// </summary>
@@ -75,7 +81,7 @@ namespace CSharp_methods_development_lab_1
         /// <returns>Индекс страницы в буфере</returns>
         public unsafe int FindIndexPage(long globalElementIndex)
         {
-            if (globalElementIndex < 0 || globalElementIndex >= _size)
+            if (globalElementIndex < 0 || globalElementIndex >= _sizeArray)
                 return -1;//Возвращает -1 если вышли за границы массива
 
             //Рассчитываем номер страницы в файле
@@ -125,7 +131,7 @@ namespace CSharp_methods_development_lab_1
         {
             get
             {
-                if (index < 0 || index >= _size)
+                if (index < 0 || index >= _sizeArray)
                     throw new ArgumentOutOfRangeException("Индекс вышел за пределы размера массива");
                 
                 int indexPage = FindIndexPage(index);//Получаем индекс страницы с нужным элементом
@@ -143,7 +149,7 @@ namespace CSharp_methods_development_lab_1
             }
             set
             {
-                if (index < 0 || index >= _size)
+                if (index < 0 || index >= _sizeArray)
                     throw new ArgumentOutOfRangeException("Индекс вышел за пределы размера массива");
 
                 //Получаем индекс страницы с нужным элементом
@@ -170,12 +176,27 @@ namespace CSharp_methods_development_lab_1
             page.timeOfModify = DateTime.Now.TimeOfDay;
             page.modify = false;
             //Расчитываем положение страницы в файле
-            int startWrite = page.fileIndex * _defaultSizePages + (System.Text.Encoding.Default.GetBytes("VA").Length+1);
+            int startWrite = page.fileIndex * (_defaultSizePages+ _sizePage/8) + (System.Text.Encoding.Default.GetBytes("VA").Length+1);
 
             BinaryWriter bw = new BinaryWriter(_swapFile.Open(FileMode.Open));
             bw.BaseStream.Seek(startWrite, SeekOrigin.Begin);
-            //Записываем
-            bw.Write(page.bitMap, 0, page.bitMap.Length);
+
+            //Конвертируем битовую карту в байтовую
+            byte[] byteMap = new byte[_sizePage / 8];
+            for(int i =0; i< byteMap.Length; i++)
+                for(int j = 0; j<8; j++)
+                {
+                    byteMap[i] <<= 1;
+                    if (page.bitMap[i * 8 + j])
+                        byteMap[i] |= 1;
+                }
+
+            //Записываем битовую карту в виде байтовой карты
+            bw.Write(byteMap, 0, byteMap.Length);
+
+            //Записываем элементы массива
+            foreach(T element in page.elements)
+                bw.Write(StructConverter.s_getBytes<T>(element), 0, sizeof(T));
 
             bw.Close();
         }
@@ -191,13 +212,20 @@ namespace CSharp_methods_development_lab_1
             page.fileIndex = globalPageIndex;
 
             //Расчитываем положение страницы в файле
-            int sizeElements = sizeof(T), startRead = page.fileIndex * _defaultSizePages + (System.Text.Encoding.Default.GetBytes("VA").Length+1);
+            int sizeElements = sizeof(T), startRead = page.fileIndex * (_defaultSizePages + _sizePage / 8) + (System.Text.Encoding.Default.GetBytes("VA").Length+1);
 
             BinaryReader br = new BinaryReader(_swapFile.Open(FileMode.Open));
             br.BaseStream.Seek(startRead, SeekOrigin.Begin);
 
             //Считываем байтовую карту из файла
-            page.bitMap = br.ReadBytes(_defaultSizePages);
+            byte[] byteData = br.ReadBytes(_sizePage / 8);
+            byte oneByte = 0b_0000_0001;
+            page.bitMap = new bool[_sizePage];
+            for (int i = _sizePage - 1; i >= 0; i--)
+                for (int j = 7; j >= 0; j--)
+                    if (((byteData[i / 8] >> j) & oneByte) == oneByte)
+                        page.bitMap[i] = true;
+
             page.elements = new T[_defaultSizePages / sizeElements];
 
             //Конвертируем байтовую
