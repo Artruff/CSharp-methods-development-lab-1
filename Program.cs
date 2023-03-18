@@ -15,8 +15,8 @@ namespace CSharp_methods_development_lab_1
                 Console.WriteLine("Введите адрес файла подкачки:");
                 string path = Console.ReadLine();
 
-                VirtualArray<int> va = new VirtualArray<int>("", 10000);
-
+                VirtualArray<int> va = new VirtualArray<int>(path, 10000);
+                int a = va[1];
                 va[0] = 256;
                 va[5000] = 2;
                 va[9999] = 1;

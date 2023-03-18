@@ -213,7 +213,7 @@ namespace CSharp_methods_development_lab_1
             BinaryReader br = new BinaryReader(_swapFile.Open(FileMode.Open));
             br.BaseStream.Seek(startRead, SeekOrigin.Begin);
 
-            //Считываем байтовую карту из файла
+            //Считываем байтовую карту из файла и конвертируем её в битовую
             byte[] byteData = br.ReadBytes(_sizePage / 8);
             byte oneByte = 0b_1000_0000;
             page.bitMap = new bool[_sizePage];
