@@ -22,7 +22,7 @@ namespace CSharp_methods_development_lab_1
         private FileInfo _swapFile; //Файл подкачки
         private page<T>[] _buffer; //Буфер страниц
         private long _sizeArray = 0; // Размер массива
-        private int _sizePage; // Размер массивов элементов страниц
+        private int _sizePage = 0; // Размер массивов элементов страниц
 
         //Конструктор
         unsafe public VirtualArray(string fileName = null, long size = 10000)
@@ -57,15 +57,17 @@ namespace CSharp_methods_development_lab_1
 
                 //Создаём сигнатуру в начале файла
                 bw.Write("VM");
+                bw.Close();
 
                 //Создаём массив в файле
                 page<T> emptyPage = new page<T>();
                 emptyPage.bitMap = new bool[_sizePage];
                 emptyPage.elements = new T[_sizePage];
                 for (int i = 0; i < _sizeArray / _defaultSizePages; i++)
+                {
                     WritePage(ref emptyPage);
-
-                bw.Close();
+                    emptyPage.fileIndex++;
+                }
             }
             //Создаём буфер в оперативной памяти
             _buffer = new page<T>[_defaultBufferSize];
@@ -81,7 +83,7 @@ namespace CSharp_methods_development_lab_1
         /// <returns>Индекс страницы в буфере</returns>
         public unsafe int FindIndexPage(long globalElementIndex)
         {
-            if (globalElementIndex < 0 || globalElementIndex >= _sizeArray)
+            if (globalElementIndex < 0 || globalElementIndex >= _sizeArray/sizeof(T))
                 return -1;//Возвращает -1 если вышли за границы массива
 
             //Рассчитываем номер страницы в файле
@@ -137,11 +139,7 @@ namespace CSharp_methods_development_lab_1
                 int indexPage = FindIndexPage(index);//Получаем индекс страницы с нужным элементом
                 int indexInBuffer = index % (_defaultSizePages/sizeof(T));
 
-                int nullCount = 0;
-                for (int i = 0; i < sizeof(T); i++)
-                    if (_buffer[indexPage].bitMap[i + indexInBuffer * sizeof(T)] == 0b_0000_0000)
-                        nullCount++;
-                if(nullCount == sizeof(T))
+                if(!_buffer[indexPage].bitMap[indexInBuffer])
                     throw new AccessViolationException("Попытка обращения к неинициализированному элементу");
 
                 //Возвращаем требуемый элемент
@@ -157,11 +155,9 @@ namespace CSharp_methods_development_lab_1
                 
                 //Устанавливаем новое значение элемента
                 _buffer[indexPage].elements[elementIndex] = value;
-                
-                //Обновляем байтовую (Она же битовая) карту
-                byte[] byteValue = StructConverter.s_getBytes<T>(value);
-                for (int i = 0; i < byteValue.Length; i++)
-                    _buffer[indexPage].bitMap[i + elementIndex * byteValue.Length] = byteValue[i];
+
+                //Обновляем битовую карту
+                _buffer[indexPage].bitMap[elementIndex] = true;
 
                 //Устанавливаем флаг модификации
                 _buffer[indexPage].modify = true;
@@ -219,24 +215,24 @@ namespace CSharp_methods_development_lab_1
 
             //Считываем байтовую карту из файла
             byte[] byteData = br.ReadBytes(_sizePage / 8);
-            byte oneByte = 0b_0000_0001;
+            byte oneByte = 0b_1000_0000;
             page.bitMap = new bool[_sizePage];
-            for (int i = _sizePage - 1; i >= 0; i--)
-                for (int j = 7; j >= 0; j--)
-                    if (((byteData[i / 8] >> j) & oneByte) == oneByte)
+            for (int i = 0; i < _sizePage; i+=8)
+                for (int j = 0; j <8; j++)
+                    if (((byteData[i / 8] << j) & oneByte) == oneByte)
                         page.bitMap[i] = true;
 
-            page.elements = new T[_defaultSizePages / sizeElements];
 
-            //Конвертируем байтовую
-            //(Она же битовая карта, где 1 байт байтовой карты - 8 бит битовой карты)
-            //карту в элементы массива
+            byteData = br.ReadBytes(_defaultSizePages);
+            page.elements = new T[_sizePage];
+
+            //Конвертируем байты элементов в элементы типа T
             for (int i = 0; i < page.elements.Length; i++)
             {
                 byte[] tmpBytes = new byte[sizeElements];
 
                 for (int j = 0; j < sizeElements; j++)
-                    tmpBytes[j] = page.bitMap[i * sizeElements + j];
+                    tmpBytes[j] = byteData[i * sizeElements + j];
 
                 page.elements[i] = StructConverter.s_createStruct<T>(tmpBytes);
             }
